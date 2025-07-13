@@ -1,0 +1,21 @@
+env GO111MODULE=on
+
+# Populate go.sum
+go list -m -mod=mod all
+
+# Check for upgrades for all modules (should include direct and indirect).
+go list -m -u all
+stdout 'rsc.io/quote v1.2.0 \[v1\.5\.2\]'
+stdout 'golang.org/x/text v0.3.0'
+
+# Check for upgrades for direct dependencies only.
+go list -m -u direct
+stdout '^rsc.io/quote v1.2.0 \[v1\.5\.2\]$'
+! stdout 'golang.org/x/text'
+
+-- go.mod --
+module x
+require (
+    rsc.io/quote v1.2.0
+    golang.org/x/text v0.3.0 // indirect
+) 

@@ -338,6 +338,7 @@ func runGet(ctx context.Context, cmd *base.Command, args []string) {
 	r.performPathQueries(ctx)
 	r.performToolQueries(ctx)
 	r.performWorkQueries(ctx)
+	r.performPatternDirectQueries(ctx)
 
 	for {
 		r.performWildcardQueries(ctx)
@@ -510,12 +511,13 @@ func parseArgs(ctx context.Context, rawArgs []string) (dropToolchain bool, queri
 }
 
 type resolver struct {
-	localQueries      []*query // queries for absolute or relative paths
-	pathQueries       []*query // package path literal queries in original order
-	wildcardQueries   []*query // path wildcard queries in original order
-	patternAllQueries []*query // queries with the pattern "all"
-	workQueries       []*query // queries with the pattern "work"
-	toolQueries       []*query // queries with the pattern "tool"
+	localQueries         []*query // queries for absolute or relative paths
+	pathQueries          []*query // package path literal queries in original order
+	wildcardQueries      []*query // path wildcard queries in original order
+	patternAllQueries    []*query // queries with the pattern "all"
+	patternDirectQueries []*query // queries with the pattern "direct"
+	workQueries          []*query // queries with the pattern "work"
+	toolQueries          []*query // queries with the pattern "tool"
 
 	// Indexed "none" queries. These are also included in the slices above;
 	// they are indexed here to speed up noneForPath.
@@ -541,6 +543,8 @@ type resolver struct {
 	// workspace is used to check whether, in workspace mode, any of the workspace
 	// modules would contain a package.
 	workspace *workspace
+
+	requirements *modload.Requirements
 }
 
 type versionReason struct {
@@ -560,6 +564,7 @@ func newResolver(ctx context.Context, queries []*query) *resolver {
 	if err != nil {
 		toolchain.SwitchOrFatal(ctx, err)
 	}
+	rs := modload.LoadModFile(ctx)
 
 	buildList := mg.BuildList()
 	initialVersion := make(map[string]string, len(buildList))
@@ -575,11 +580,14 @@ func newResolver(ctx context.Context, queries []*query) *resolver {
 		initialVersion:   initialVersion,
 		nonesByPath:      map[string]*query{},
 		workspace:        loadWorkspace(modload.FindGoWork(base.Cwd())),
+		requirements:     rs,
 	}
 
 	for _, q := range queries {
 		if q.pattern == "all" {
 			r.patternAllQueries = append(r.patternAllQueries, q)
+		} else if q.pattern == "direct" {
+			r.patternDirectQueries = append(r.patternDirectQueries, q)
 		} else if q.pattern == "work" {
 			r.workQueries = append(r.workQueries, q)
 		} else if q.pattern == "tool" {
@@ -1144,6 +1152,25 @@ func (r *resolver) performPatternAllQueries(ctx context.Context) {
 	// including in which errors it chooses to report, so sort the candidates
 	// into a deterministic-but-arbitrary order.
 	for _, q := range r.patternAllQueries {
+		sort.Slice(q.candidates, func(i, j int) bool {
+			return q.candidates[i].path < q.candidates[j].path
+		})
+	}
+}
+
+// performPatternDirectQueries populates the candidates for each query whose
+// pattern is "direct".
+func (r *resolver) performPatternDirectQueries(ctx context.Context) {
+	for _, q := range r.patternDirectQueries {
+		for _, mod := range r.buildList {
+			if r.requirements.IsDirect(mod.Path) && !gover.IsToolchain(mod.Path) {
+				q.pathOnce(mod.Path, func() (ps pathSet) {
+					ps.mod, ps.err = r.queryModule(ctx, mod.Path, q.version, r.initialSelected)
+					return ps
+				})
+			}
+		}
+		// Sort for determinism.
 		sort.Slice(q.candidates, func(i, j int) bool {
 			return q.candidates[i].path < q.candidates[j].path
 		})

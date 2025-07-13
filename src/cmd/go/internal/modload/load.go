@@ -258,10 +258,14 @@ func LoadPackages(ctx context.Context, opts PackageOpts, patterns ...string) (ma
 	patterns = search.CleanPatterns(patterns)
 	matches = make([]*search.Match, 0, len(patterns))
 	allPatternIsRoot := false
+	directPatternIsRoot := false
 	for _, pattern := range patterns {
 		matches = append(matches, search.NewMatch(pattern))
 		if pattern == "all" {
 			allPatternIsRoot = true
+		}
+		if pattern == "direct" {
+			directPatternIsRoot = true
 		}
 	}
 
@@ -349,6 +353,22 @@ func LoadPackages(ctx context.Context, opts PackageOpts, patterns ...string) (ma
 					m.Pkgs = ld.computePatternAll()
 				}
 
+			case m.Pattern() == "direct":
+				if ld == nil {
+					// The initial roots are the packages in the main module.
+					// loadFromRoots will expand that.
+					m.Errs = m.Errs[:0]
+					matchModules := MainModules.Versions()
+					if opts.MainModule != (module.Version{}) {
+						matchModules = []module.Version{opts.MainModule}
+					}
+					matchPackages(ctx, m, opts.Tags, omitStd, matchModules)
+				} else {
+					// Starting with the packages in the main module,
+					// enumerate the "direct" dependencies
+					m.Pkgs = ld.computePatternDirect()
+				}
+
 			case m.Pattern() == "std" || m.Pattern() == "cmd":
 				if m.Pkgs == nil {
 					m.MatchPackages() // Locate the packages within GOROOT/src.
@@ -373,7 +393,8 @@ func LoadPackages(ctx context.Context, opts PackageOpts, patterns ...string) (ma
 		PackageOpts:  opts,
 		requirements: initialRS,
 
-		allPatternIsRoot: allPatternIsRoot,
+		allPatternIsRoot:    allPatternIsRoot,
+		directPatternIsRoot: directPatternIsRoot,
 
 		listRoots: func(rs *Requirements) (roots []string) {
 			updateMatches(rs, nil)
@@ -913,6 +934,8 @@ type loaderParams struct {
 
 	allPatternIsRoot bool // Is the "all" pattern an additional root?
 
+	directPatternIsRoot bool // Is the "direct" pattern an additional root?
+
 	listRoots func(rs *Requirements) []string
 }
 
@@ -1368,7 +1391,7 @@ func (ld *loader) updateRequirements(ctx context.Context) (changed bool, err err
 	// imports.AnyTags, then we didn't necessarily load every package that
 	// contributes “direct” imports — so we can't safely mark existing direct
 	// dependencies in ld.requirements as indirect-only. Propagate them as direct.
-	loadedDirect := ld.allPatternIsRoot && maps.Equal(ld.Tags, imports.AnyTags())
+	loadedDirect := (ld.allPatternIsRoot || ld.directPatternIsRoot) && maps.Equal(ld.Tags, imports.AnyTags())
 	if loadedDirect {
 		direct = make(map[string]bool)
 	} else {
@@ -1717,7 +1740,7 @@ func (ld *loader) applyPkgFlags(ctx context.Context, pkg *loadPkg, flags loadPkg
 			// (We will filter out the extra tests explicitly in computePatternAll.)
 			wantTest = true
 
-		case ld.allPatternIsRoot && ld.allClosesOverTests && new.has(pkgInAll):
+		case (ld.directPatternIsRoot || (ld.allPatternIsRoot && ld.allClosesOverTests)) && new.has(pkgInAll):
 			// This variant of the "all" pattern includes imports of tests of every
 			// package that is itself in "all", and pkg is in "all", so its test is
 			// also in "all" (as above).
@@ -2022,6 +2045,36 @@ func (ld *loader) computePatternAll() (all []string) {
 	}
 	sort.Strings(all)
 	return all
+}
+
+// computePatternAll returns the list of packages matching pattern "all",
+// starting with a list of the import paths for the packages in the main module.
+func (ld *loader) computePatternDirect() (direct []string) {
+	seen := map[string]bool{}
+	for _, root := range ld.roots {
+		for _, im := range root.imports {
+			seen[im.path] = true
+		}
+		if root.test != nil {
+			for _, im := range root.test.imports {
+				seen[im.path] = true
+			}
+		}
+	}
+	for _, pkg := range ld.pkgs {
+		if module.CheckImportPath(pkg.path) != nil {
+			// Don't add packages with invalid paths. This means that
+			// we don't try to load invalid imports of the main modules'
+			// packages. We will still report an errors invalid imports
+			// when we load the importing package.
+			continue
+		}
+		if seen[pkg.path] {
+			direct = append(direct, pkg.path)
+		}
+	}
+	sort.Strings(direct)
+	return direct
 }
 
 // checkMultiplePaths verifies that a given module path is used as itself

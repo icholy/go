@@ -18,6 +18,8 @@ _cgo_*
 _obj
 _test
 _testmain.go
+go.work
+go.work.sum
 
 /VERSION.cache
 /bin/

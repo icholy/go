@@ -230,6 +230,8 @@ func listModules(ctx context.Context, rs *Requirements, args []string, mode List
 		var match func(string) bool
 		if arg == "all" {
 			match = func(p string) bool { return !gover.IsToolchain(p) }
+		} else if arg == "direct" {
+			match = func(p string) bool { return !gover.IsToolchain(p) && rs.IsDirect(p) }
 		} else if strings.Contains(arg, "...") {
 			mp := pkgpattern.MatchPattern(arg)
 			match = func(p string) bool { return mp(p) && !gover.IsToolchain(p) }

@@ -69,7 +69,7 @@ func (m *Match) IsMeta() bool {
 
 // IsMetaPackage checks if name is a reserved package name that expands to multiple packages.
 func IsMetaPackage(name string) bool {
-	return name == "std" || name == "cmd" || name == "tool" || name == "work" || name == "all"
+	return name == "std" || name == "cmd" || name == "tool" || name == "work" || name == "all" || name == "direct"
 }
 
 // A MatchError indicates an error that occurred while attempting to match a
